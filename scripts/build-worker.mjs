@@ -1,4 +1,4 @@
-import { copyFile, readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
+﻿import { copyFile, readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import { build as bundle } from 'esbuild';
@@ -18,46 +18,38 @@ const types = {
 const assets = {};
 
 /*
- * Local development:
- * Load the project's .env file when it exists.
- *
- * Production:
- * Render supplies these values through process.env.
+ * Load local environment variables when .env exists.
+ * On Render, environment variables come from Render itself.
  */
 if (existsSync(join(root, '.env'))) {
   process.loadEnvFile(join(root, '.env'));
 }
 
 /*
- * Safe configuration diagnostics.
- *
- * Never print the actual Supabase URL or publishable key.
+ * Safe diagnostics.
+ * These only say whether variables exist.
+ * They never print the actual credentials.
  */
-const hasSupabaseUrl = Boolean(
-  process.env.SUPABASE_URL?.trim()
-);
-
-const hasSupabasePublishableKey = Boolean(
-  process.env.SUPABASE_PUBLISHABLE_KEY?.trim()
-);
+const supabaseUrl = process.env.SUPABASE_URL?.trim() || '';
+const supabasePublishableKey =
+  process.env.SUPABASE_PUBLISHABLE_KEY?.trim() || '';
 
 console.log(
-  `Supabase URL configured: ${hasSupabaseUrl ? 'YES' : 'NO'}`
+  `Supabase URL configured: ${supabaseUrl ? 'YES' : 'NO'}`
 );
 
 console.log(
   `Supabase publishable key configured: ${
-    hasSupabasePublishableKey ? 'YES' : 'NO'
+    supabasePublishableKey ? 'YES' : 'NO'
   }`
 );
 
 /*
- * Build the browser-safe Supabase client.
+ * Build browser Supabase client.
  *
- * SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are intentionally
- * embedded in the browser bundle.
- *
- * NEVER place a Supabase service_role key here.
+ * IMPORTANT:
+ * Only use the browser-safe publishable key here.
+ * Never use the service_role key.
  */
 await bundle({
   entryPoints: [
@@ -75,18 +67,16 @@ await bundle({
   minify: true,
 
   define: {
-    __AQUAPOINT_SUPABASE_URL__: JSON.stringify(
-      process.env.SUPABASE_URL?.trim() || ''
-    ),
+    __AQUAPOINT_SUPABASE_URL__:
+      JSON.stringify(supabaseUrl),
 
-    __AQUAPOINT_SUPABASE_PUBLISHABLE_KEY__: JSON.stringify(
-      process.env.SUPABASE_PUBLISHABLE_KEY?.trim() || ''
-    )
+    __AQUAPOINT_SUPABASE_PUBLISHABLE_KEY__:
+      JSON.stringify(supabasePublishableKey)
   }
 });
 
 /*
- * Admin authentication controller.
+ * Copy admin authentication module into dist/.
  */
 await copyFile(
   join(root, 'src/admin-auth.js'),
@@ -94,14 +84,16 @@ await copyFile(
 );
 
 /*
- * Collect generated static assets for the Worker build.
+ * Collect static files.
  */
 async function collect(dir) {
-  for (const entry of await readdir(dir, {
-    withFileTypes: true
-  })) {
+  for (
+    const entry of await readdir(dir, {
+      withFileTypes: true
+    })
+  ) {
     /*
-     * Do not recursively include the generated Worker server directory.
+     * Avoid recursively collecting generated Worker files.
      */
     if (
       dir === sourceDir &&
@@ -125,8 +117,7 @@ async function collect(dir) {
     }
 
     /*
-     * Video remains a separate static file.
-     * Do not inline MP4/WebM files into Worker source.
+     * Keep large video files outside the embedded Worker assets.
      */
     if (
       ['.mp4', '.webm'].includes(
@@ -145,31 +136,65 @@ async function collect(dir) {
     let content = await readFile(path);
 
     /*
-     * Make Supabase and Admin Auth load BEFORE app.js.
+     * Render publishes dist/ directly.
      *
-     * This is especially important for production /admin routes.
+     * Therefore we must BOTH:
      *
-     * app.js expects:
+     * 1. Modify the HTML used by the Worker.
+     * 2. Write the modified HTML back into dist/.
      *
-     * globalThis.__aquapointSupabase
-     * globalThis.__aquapointAdminAuth
-     *
-     * to already exist when the application starts.
+     * Supabase and admin-auth must finish loading before app.js.
      */
     if (extname(path) === '.html') {
       const html = content.toString('utf8');
+const loader = `<script type="module">import "/supabase-client.js"; import "/admin-auth.js"; import "/app.js";</script>`;
+
+      let updatedHtml = html;
+
+      /*
+       * Replace the normal app.js module script.
+       *
+       * Regex is used so whitespace differences don't break
+       * the production build.
+       */
+      const appScriptPattern =
+        /<script\s+type=["']module["']\s+src=["']\/app\.js["']\s*><\/script>/i;
+
+      if (appScriptPattern.test(html)) {
+        updatedHtml = html.replace(
+          appScriptPattern,
+          loader
+        );
+      }
+
+      /*
+       * Fail the build instead of silently deploying broken
+       * admin authentication.
+       */
+      if (
+        !updatedHtml.includes('/supabase-client.js') ||
+        !updatedHtml.includes('/admin-auth.js')
+      ) {
+        throw new Error(
+          `Failed to inject admin authentication modules into ${key}`
+        );
+      }
+
+      /*
+       * This is the critical fix for Render Static Site.
+       *
+       * Previously we only changed the in-memory Worker asset.
+       * Render continued serving the original dist/index.html.
+       */
+      await writeFile(
+        path,
+        updatedHtml,
+        'utf8'
+      );
 
       content = Buffer.from(
-        html.replace(
-          '<script type="module" src="/app.js"></script>',
-
-          `<script type="module">
-    import "/supabase-client.js";
-    import "/admin-auth.js";
-
-    await import("/app.js");
-  </script>`
-        )
+        updatedHtml,
+        'utf8'
       );
     }
 
@@ -185,7 +210,7 @@ async function collect(dir) {
 }
 
 /*
- * Collect all generated static assets.
+ * Process dist/.
  */
 await collect(sourceDir);
 
@@ -200,7 +225,7 @@ const rooms = JSON.parse(
 );
 
 /*
- * Build Worker server.
+ * Generate Worker build.
  */
 let worker = await readFile(
   join(root, 'worker', 'index.js'),
@@ -218,7 +243,7 @@ worker = worker
   );
 
 /*
- * Create generated server directory.
+ * Ensure server output directory exists.
  */
 await mkdir(
   join(sourceDir, 'server'),
