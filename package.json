@@ -1,0 +1,22 @@
+{
+  "name": "aquapoint-beach",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build-worker.mjs",
+    "dev": "npm run preview:mock",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "preview:mock": "npm run build && node tests/preview-server.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "dotenv": "^18.0.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

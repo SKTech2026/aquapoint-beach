@@ -1,0 +1,136 @@
+[
+  {
+    "slug": "annex-room",
+    "name": "Annex Room",
+    "category": "Intimate stay",
+    "capacity": 2,
+    "price": 5500,
+    "image": "annex-room.webp",
+    "description": "A simple and comfortable retreat for couples or two guests looking for an easy beach escape with essential resort comfort.",
+    "cta": "View Room",
+    "reserve": "Reserve Annex Room",
+    "tags": [
+      "Couples"
+    ]
+  },
+  {
+    "slug": "premier-room",
+    "name": "Premier Room",
+    "category": "Premier stay",
+    "capacity": 3,
+    "price": 6000,
+    "image": "premier-room.webp",
+    "description": "A polished premier room for small families or friends, balancing resort comfort with a calm tropical atmosphere.",
+    "cta": "View Premier Room",
+    "reserve": "Reserve This Room",
+    "tags": [
+      "Couples",
+      "Families"
+    ]
+  },
+  {
+    "slug": "premier-deluxe",
+    "name": "Premier Deluxe",
+    "category": "Premier stay",
+    "capacity": 4,
+    "price": 7000,
+    "image": "premier-deluxe.webp",
+    "description": "A spacious upgraded room designed for families and small groups, combining resort comfort with a warm and relaxing atmosphere.",
+    "cta": "Explore Premier Deluxe",
+    "reserve": "Reserve This Room",
+    "tags": [
+      "Families"
+    ]
+  },
+  {
+    "slug": "cabin-1",
+    "name": "Cabin 1",
+    "category": "Private cabin",
+    "capacity": 3,
+    "price": 6000,
+    "image": "cabin-1.webp",
+    "description": "A cozy cabin-style accommodation perfect for couples or small groups looking for a more private and relaxed beach stay.",
+    "cta": "View Cabin",
+    "reserve": "Reserve Cabin 1",
+    "tags": [
+      "Couples",
+      "Families"
+    ]
+  },
+  {
+    "slug": "annex-dorm",
+    "name": "Annex Dorm",
+    "category": "Shared stay",
+    "capacity": 6,
+    "price": 8000,
+    "image": "annex-dorm.webp",
+    "description": "A practical shared accommodation for barkadas, families, and small groups who want to stay together during their beach getaway.",
+    "cta": "Explore Annex Dorm",
+    "reserve": "Reserve This Room",
+    "tags": [
+      "Families",
+      "Groups"
+    ]
+  },
+  {
+    "slug": "annex-loft-room",
+    "name": "Annex Loft Room",
+    "category": "Loft stay",
+    "capacity": 8,
+    "price": 10000,
+    "image": "annex-loft.webp",
+    "description": "A roomy loft-style accommodation ideal for larger families and groups looking for flexible sleeping space near the resort experience.",
+    "cta": "View Annex Loft",
+    "reserve": "Reserve This Room",
+    "tags": [
+      "Families",
+      "Groups"
+    ]
+  },
+  {
+    "slug": "premier-loft-room",
+    "name": "Premier Loft Room",
+    "category": "Loft stay",
+    "capacity": 10,
+    "price": 12000,
+    "image": "premier-loft.webp",
+    "description": "A premium loft-style accommodation offering additional space and flexible sleeping arrangements for families and groups.",
+    "cta": "Explore Premier Loft",
+    "reserve": "Reserve This Room",
+    "tags": [
+      "Groups",
+      "Large Groups"
+    ]
+  },
+  {
+    "slug": "dormitory-room",
+    "name": "Dormitory Room",
+    "category": "Group stay",
+    "capacity": 15,
+    "price": 15000,
+    "image": "dormitory.webp",
+    "description": "A spacious group accommodation designed for retreats, barkadas, student groups, family gatherings, and team outings.",
+    "cta": "View Dormitory",
+    "reserve": "Reserve Dormitory",
+    "tags": [
+      "Groups",
+      "Large Groups"
+    ]
+  },
+  {
+    "slug": "aquapoint-luxury-villa",
+    "name": "Aquapoint Luxury Villa",
+    "category": "Private villa",
+    "capacity": null,
+    "price": null,
+    "image": "luxury-villa.webp",
+    "description": "A spacious private retreat designed for families, celebrations, and group escapes, offering generous sleeping space and the comfort of a private resort stay.",
+    "cta": "Explore Villa",
+    "reserve": "Reserve Villa",
+    "tags": [
+      "Families",
+      "Groups",
+      "Large Groups"
+    ]
+  }
+]
