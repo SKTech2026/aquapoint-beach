@@ -6,20 +6,22 @@ import vm from 'node:vm';
 const source = readFileSync('dist/app.js', 'utf8');
 const extract = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 
-test('homepage keeps the CTA and poster behind a muted looping video', () => {
+test('homepage uses the resort hero image as poster behind a muted looping video', () => {
   const app = { innerHTML: '' };
   const context = {
     app,
     rooms: Array(9).fill({}),
     getConfiguredRooms: () => [{ slug: 'aquapoint-luxury-villa', image: 'luxury-villa.webp' }],
     getSiteConfig: () => ({ hero: {}, intro: {}, sections: {}, experiences: [], amenities: [], gallery: [], featuredRoomSlugs: [] }),
-    img: () => '/images/rooms/luxury-villa.webp',
+    img: () => '/images/resort-aerial.webp',
     card: () => '',
     svg: () => ''
   };
   vm.runInNewContext(`${extract('function shell(', '\nfunction home(')}\n${extract('function home(', '\nfunction listing(')}\nhome();`, context);
   assert.match(app.innerHTML, /<video[^>]*autoplay[^>]*muted[^>]*loop[^>]*playsinline[^>]*preload="metadata"/);
-  assert.match(app.innerHTML, /poster="\/images\/rooms\/luxury-villa.webp"/);
+  assert.match(app.innerHTML, /poster="\/images\/resort-aerial.webp"/);
+  assert.match(app.innerHTML, /class="hero-photo" width="1280" height="720"/);
+  assert.doesNotMatch(app.innerHTML, /<img src=""/);
   assert.doesNotMatch(app.innerHTML, /<video[^>]*controls/);
   assert.match(app.innerHTML, /Make room for<br><em>the coast/);
   assert.match(app.innerHTML, /href="\/rooms\/">EXPLORE OUR STAYS/);
