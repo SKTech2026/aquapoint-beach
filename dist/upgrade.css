@@ -50,7 +50,7 @@ footer{background:var(--midnight);padding:75px 7%}.footer-main{display:grid;grid
 .admin-main .admin-table td{padding:11px;border-bottom:1px solid rgba(6,59,76,.09);vertical-align:top;line-height:1.5}
 .admin-main .admin-table tbody tr:last-child td{border-bottom:0}.admin-main .admin-table td a{font-weight:600}
 .admin-main .status-badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:2px;background:#edf4f0;color:#386552;font-size:10px;font-weight:700;text-transform:capitalize}
-.admin-main .status-pending{background:#f7f0df;color:#80652b}.admin-main .status-cancelled{background:#f7e9e5;color:#963e33}.admin-main .status-completed{background:#e7f2ed;color:#386552}
+.admin-main .status-pending{background:#f7f0df;color:#80652b}.admin-main .status-cancelled,.admin-main .status-not_available{background:#f7e9e5;color:#963e33}.admin-main .status-completed{background:#e7f2ed;color:#386552}
 .admin-main .quick-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:16px}.admin-main .quick-actions .button{min-height:40px;padding:0 13px;font-size:9px;letter-spacing:.05em}
 .admin-main .filter-form{margin:0}.admin-main .filter-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .admin-main .filter-row input,.admin-main .filter-row select{min-width:130px;min-height:39px;padding:7px 10px;border:1px solid rgba(6,59,76,.2);border-radius:2px;background:#fff;color:var(--ink);font-size:12px;letter-spacing:0;text-transform:none}

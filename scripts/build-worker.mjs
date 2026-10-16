@@ -1,4 +1,4 @@
-﻿import { copyFile, readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import { build as bundle } from 'esbuild';
@@ -147,7 +147,7 @@ async function collect(dir) {
      */
     if (extname(path) === '.html') {
       const html = content.toString('utf8');
-const loader = `<script type="module">import "/supabase-client.js"; import "/admin-auth.js"; import "/app.js";</script>`;
+      const loader = `<script type="module">import "/supabase-client.js"; import "/admin-auth.js"; import "/app.js";</script>`;
 
       let updatedHtml = html;
 

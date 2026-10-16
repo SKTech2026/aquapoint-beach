@@ -3,3 +3,5 @@
 !.env.example
 aquapoint-site.tar.gz
 node_modules/
+
+supabase/.temp/

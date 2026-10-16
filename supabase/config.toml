@@ -1,0 +1,5 @@
+[functions.create-reservation]
+verify_jwt = false
+
+[functions.reservation-email]
+verify_jwt = true

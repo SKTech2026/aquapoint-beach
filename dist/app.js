@@ -313,6 +313,49 @@ function renderAdminLogin(authState = {}) {
 
 let adminAuthController;
 let adminAuthEventsInstalled = false;
+let reservationAdmin;
+let adminReservationRows = [];
+let adminReservationState = 'loading';
+let adminReservationMessage = '';
+let adminReservationChannel;
+let adminReservationBusy = false;
+let adminReservationLoadId = 0;
+
+function renderCurrentAdminPage() {
+  const path = location.pathname.replace(/\/+$/, '') || '/admin/dashboard';
+  app.innerHTML = renderAdminPage(path === '/admin' ? '/admin/dashboard' : path);
+}
+
+async function loadAdminReservations() {
+  if (!reservationAdmin) return;
+  const loadId = ++adminReservationLoadId;
+  try {
+    const rows = await reservationAdmin.list();
+    if (loadId !== adminReservationLoadId) return;
+    adminReservationRows = rows;
+    adminReservationState = 'ready';
+  } catch (error) {
+    if (loadId !== adminReservationLoadId) return;
+    adminReservationRows = [];
+    adminReservationState = 'error';
+    adminReservationMessage = error?.code === '42501' ? 'Reservation access denied.' : 'Reservations could not be loaded. Please try again.';
+  }
+  renderCurrentAdminPage();
+}
+
+function startReservationSync(profile) {
+  if (!['administrator', 'reservation_staff'].includes(profile?.role)) {
+    adminReservationRows = [];
+    adminReservationState = 'error';
+    adminReservationMessage = 'Reservation access denied.';
+    renderCurrentAdminPage();
+    return;
+  }
+  if (!globalThis.__aquapointSupabase || !globalThis.__aquapointReservationAdmin) return;
+  reservationAdmin ||= globalThis.__aquapointReservationAdmin.createReservationAdmin(globalThis.__aquapointSupabase);
+  void loadAdminReservations();
+  if (!adminReservationChannel) adminReservationChannel = reservationAdmin.subscribe(() => { void loadAdminReservations(); });
+}
 
 function installAdminAuthEvents() {
   if (adminAuthEventsInstalled || typeof document === 'undefined') return;
@@ -334,6 +377,42 @@ function installAdminAuthEvents() {
     event.preventDefault();
     void adminAuthController.signOut();
   });
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-reservation-decision], [data-reservation-retry]');
+    if (!button || adminReservationBusy || !reservationAdmin) return;
+    const id = button.dataset.reservationId;
+    const row = adminReservationRows.find(item => item.id === id);
+    if (!row) return;
+    const decision = button.dataset.reservationDecision;
+    if (decision && !confirm(`${decision === 'confirmed' ? 'Confirm' : 'Mark as not available'} reservation ${row.reservationNumber}?`)) return;
+    adminReservationBusy = true;
+    button.disabled = true;
+    adminReservationMessage = 'Processing reservation…';
+    renderCurrentAdminPage();
+    try {
+      if (decision) {
+        const result = await reservationAdmin.decide(id, decision);
+        if (result !== 'updated') {
+          adminReservationMessage = 'Another staff member has already decided this reservation.';
+          await loadAdminReservations();
+          return;
+        }
+      }
+      try {
+        await reservationAdmin.email(id);
+        adminReservationMessage = 'Reservation updated and guest email accepted.';
+      } catch {
+        adminReservationMessage = 'Reservation updated, but the guest email could not be sent.';
+      }
+      await loadAdminReservations();
+    } catch {
+      adminReservationMessage = 'Reservation could not be updated. Please refresh and try again.';
+      await loadAdminReservations();
+    } finally {
+      adminReservationBusy = false;
+      renderCurrentAdminPage();
+    }
+  });
 }
 
 function startAdminRoute(path) {
@@ -348,7 +427,8 @@ function startAdminRoute(path) {
     supabase: globalThis.__aquapointSupabase,
     onStateChange(state) {
       if (state.status === 'authorized') {
-        app.innerHTML = renderAdminPage(path === '/admin' || path === '/admin/' ? '/admin/dashboard' : path);
+        renderCurrentAdminPage();
+        startReservationSync(state.profile);
         return;
       }
       if (state.status === 'checking' && app.querySelector('[data-admin-login]')) {
@@ -356,6 +436,13 @@ function startAdminRoute(path) {
         if (submit) submit.disabled = true;
         return;
       }
+      if (adminReservationChannel) {
+        void globalThis.__aquapointSupabase?.removeChannel(adminReservationChannel);
+        adminReservationChannel = null;
+      }
+      adminReservationRows = [];
+      adminReservationLoadId += 1;
+      adminReservationState = 'loading';
       app.innerHTML = renderAdminLogin(state);
     },
     onRedirect: (target) => location.replace(target)
@@ -366,19 +453,27 @@ function startAdminRoute(path) {
 }
 
 function renderDashboard() {
-  const stats = getDashboardStats();
-  const reservations = getReservations().slice(0, 6);
-  const rows = reservations.map((item) => `<tr><td>${item.reservationNumber}</td><td>${item.guestFullName}</td><td>${item.roomName}</td><td>${item.checkIn}</td><td>${item.checkOut}</td><td>${item.adults + item.children}</td><td>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</td><td><span class="status-badge status-${item.status}">${item.status}</span></td></tr>`).join('');
-  return adminShell('Dashboard', '/admin/dashboard', `<div class="stats-grid"><div class="stat-card"><span>Pending Requests</span><strong>${stats.pending}</strong></div><div class="stat-card"><span>Confirmed Bookings</span><strong>${stats.confirmed}</strong></div><div class="stat-card"><span>Arrivals Today</span><strong>${stats.arrivalsToday}</strong></div><div class="stat-card"><span>Departures Today</span><strong>${stats.departuresToday}</strong></div><div class="stat-card wide"><span>Mock Booking Value</span><strong>${peso(stats.bookingValue)}</strong></div></div><div class="admin-panel"><div class="panel-head"><h2>Recent Reservations</h2><a href="/admin/reservations">Open full list</a></div><table class="admin-table"><thead><tr><th>Reservation #</th><th>Guest</th><th>Room</th><th>Check-in</th><th>Check-out</th><th>Guests</th><th>Estimated Total</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div><div class="quick-actions"><button class="button dark" type="button" data-route="/admin/reservations/new">New Reservation</button><button class="button cream" type="button" data-route="/admin/website/rooms">Manage Rooms</button><button class="button cream" type="button" data-route="/admin/website/homepage">Edit Homepage</button><button class="button cream" type="button" data-route="/admin/media">Upload Media</button><button class="button cream" type="button" data-route="/">View Website</button></div>`);
+  if (adminReservationState !== 'ready') return adminShell('Dashboard', '/admin/dashboard', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations…' : escapeHtml(adminReservationMessage)}</div>`);
+  const reservations = adminReservationRows.slice(0, 6);
+  const stats = {
+    pending: adminReservationRows.filter(row => row.status === 'pending').length,
+    confirmed: adminReservationRows.filter(row => row.status === 'confirmed').length,
+    arrivalsToday: adminReservationRows.filter(row => row.checkIn === new Date().toISOString().slice(0, 10)).length,
+    departuresToday: adminReservationRows.filter(row => row.checkOut === new Date().toISOString().slice(0, 10)).length,
+    bookingValue: adminReservationRows.filter(row => row.status === 'confirmed').reduce((sum, row) => sum + Number(row.estimatedTotal || 0), 0)
+  };
+  const rows = reservations.map((item) => `<tr><td>${escapeHtml(item.reservationNumber)}</td><td>${escapeHtml(item.guestFullName)}</td><td>${escapeHtml(item.roomName)}</td><td>${escapeHtml(item.checkIn)}</td><td>${escapeHtml(item.checkOut)}</td><td>${item.adults + item.children}</td><td>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</td><td><span class="status-badge status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span></td></tr>`).join('');
+  return adminShell('Dashboard', '/admin/dashboard', `<div class="stats-grid"><div class="stat-card"><span>Pending Requests</span><strong>${stats.pending}</strong></div><div class="stat-card"><span>Confirmed Bookings</span><strong>${stats.confirmed}</strong></div><div class="stat-card"><span>Total Reservations</span><strong>${adminReservationRows.length}</strong></div><div class="stat-card"><span>Arrivals Today</span><strong>${stats.arrivalsToday}</strong></div><div class="stat-card"><span>Departures Today</span><strong>${stats.departuresToday}</strong></div></div><div class="admin-panel"><div class="panel-head"><h2>Recent Reservations</h2><a href="/admin/reservations">Open full list</a></div><table class="admin-table"><thead><tr><th>Reservation #</th><th>Guest</th><th>Room</th><th>Check-in</th><th>Check-out</th><th>Guests</th><th>Estimated Total</th><th>Status</th></tr></thead><tbody>${rows || '<tr><td colspan="8">No reservations yet.</td></tr>'}</tbody></table></div>`);
 }
 
 function renderReservations() {
+  if (adminReservationState !== 'ready') return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations…' : escapeHtml(adminReservationMessage)}</div>`);
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
   const query = (params.get('q') || '').toLowerCase();
   const status = params.get('status') || 'all';
   const room = params.get('room') || 'all';
   const date = params.get('date') || 'all';
-  let list = getReservations().filter((row) => {
+  let list = adminReservationRows.filter((row) => {
     const matchesQuery = !query || row.reservationNumber.toLowerCase().includes(query) || row.guestFullName.toLowerCase().includes(query) || row.guestEmail.toLowerCase().includes(query) || row.guestPhone.toLowerCase().includes(query);
     const matchesStatus = status === 'all' || row.status === status;
     const matchesRoom = room === 'all' || row.roomSlug === room;
@@ -387,15 +482,16 @@ function renderReservations() {
     return matchesQuery && matchesStatus && matchesRoom && matchesDate;
   });
   const roomOptions = rooms.map((item) => `<option value="${item.slug}" ${room === item.slug ? 'selected' : ''}>${item.name}</option>`).join('');
-  const rows = list.map((item) => `<tr data-id="${item.id}"><td><a href="/admin/reservations/${item.id}">${item.reservationNumber}</a></td><td>${item.guestFullName}</td><td>${item.roomName}</td><td>${item.checkIn}</td><td>${item.checkOut}</td><td>${item.adults + item.children}</td><td>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</td><td>${item.paymentMethod || 'pay_at_resort'}</td><td><span class="status-badge status-${item.status}">${item.status}</span></td><td>${new Date(item.createdAt).toLocaleDateString('en-PH')}</td><td><a href="/admin/reservations/${item.id}">Open</a></td></tr>`).join('');
-  const filters = `<form class="filter-form" method="get"><div class="filter-row"><input name="q" value="${params.get('q') || ''}" placeholder="Search by reservation, guest, email, phone" /><select name="status"><option value="all" ${status === 'all' ? 'selected' : ''}>All</option><option value="pending" ${status === 'pending' ? 'selected' : ''}>Pending</option><option value="confirmed" ${status === 'confirmed' ? 'selected' : ''}>Confirmed</option><option value="cancelled" ${status === 'cancelled' ? 'selected' : ''}>Cancelled</option><option value="completed" ${status === 'completed' ? 'selected' : ''}>Completed</option></select><select name="room"><option value="all">All Rooms</option>${roomOptions}</select><select name="date"><option value="all" ${date === 'all' ? 'selected' : ''}>All</option><option value="today" ${date === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${date === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="past" ${date === 'past' ? 'selected' : ''}>Past</option></select><button class="button dark small" type="submit">Apply</button><a class="button cream small" href="/admin/reservations">Clear Filters</a></div></form>`;
+  const rows = list.map((item) => `<tr data-id="${escapeHtml(item.id)}"><td><a href="/admin/reservations/${escapeHtml(item.id)}">${escapeHtml(item.reservationNumber)}</a></td><td>${escapeHtml(item.guestFullName)}</td><td>${escapeHtml(item.roomName)}</td><td>${escapeHtml(item.checkIn)}</td><td>${escapeHtml(item.checkOut)}</td><td>${item.adults + item.children}</td><td>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</td><td>${escapeHtml(item.paymentMethod || 'Not supplied')}</td><td><span class="status-badge status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span></td><td>${new Date(item.createdAt).toLocaleDateString('en-PH')}</td><td><a href="/admin/reservations/${escapeHtml(item.id)}">Open</a></td></tr>`).join('');
+  const filters = `<form class="filter-form" method="get"><div class="filter-row"><input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Search by reservation, guest, email, phone" /><select name="status"><option value="all" ${status === 'all' ? 'selected' : ''}>All</option><option value="pending" ${status === 'pending' ? 'selected' : ''}>Pending</option><option value="confirmed" ${status === 'confirmed' ? 'selected' : ''}>Confirmed</option><option value="not_available" ${status === 'not_available' ? 'selected' : ''}>Not Available</option><option value="cancelled" ${status === 'cancelled' ? 'selected' : ''}>Cancelled</option><option value="completed" ${status === 'completed' ? 'selected' : ''}>Completed</option></select><select name="room"><option value="all">All Rooms</option>${roomOptions}</select><select name="date"><option value="all" ${date === 'all' ? 'selected' : ''}>All</option><option value="today" ${date === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${date === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="past" ${date === 'past' ? 'selected' : ''}>Past</option></select><button class="button dark small" type="submit">Apply</button><a class="button cream small" href="/admin/reservations">Clear Filters</a></div></form>`;
   return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel"><div class="panel-head"><h2>Search & filter</h2></div>${filters}</div><div class="admin-panel"><table class="admin-table"><thead><tr><th>Reservation #</th><th>Guest</th><th>Accommodation</th><th>Check-in</th><th>Check-out</th><th>Guests</th><th>Estimated Total</th><th>Payment Preference</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="11">No reservations match the current filters.</td></tr>'}</tbody></table></div>`);
 }
 
 function renderReservationDetail(id) {
-  const item = getReservations().find((row) => row.id === id || row.reservationNumber === id);
+  if (adminReservationState !== 'ready') return adminShell('Reservation', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservation…' : escapeHtml(adminReservationMessage)}</div>`);
+  const item = adminReservationRows.find((row) => row.id === id || row.reservationNumber === id);
   if (!item) return adminShell('Reservation Not Found', '/admin/reservations', '<div class="admin-panel"><h2>Reservation not found</h2></div>');
-  return adminShell(`Reservation: ${item.reservationNumber}`, '/admin/reservations', `<div class="reservation-detail-grid"><section class="admin-panel"><h2>Reservation</h2><dl class="detail-list"><div><dt>Reservation Number</dt><dd>${item.reservationNumber}</dd></div><div><dt>Status</dt><dd>${item.status}</dd></div><div><dt>Created</dt><dd>${new Date(item.createdAt).toLocaleString('en-PH')}</dd></div><div><dt>Updated</dt><dd>${new Date(item.updatedAt).toLocaleString('en-PH')}</dd></div></dl></section><section class="admin-panel"><h2>Guest</h2><dl class="detail-list"><div><dt>Full Name</dt><dd>${item.guestFullName}</dd></div><div><dt>Email</dt><dd>${item.guestEmail}</dd></div><div><dt>Phone</dt><dd>${item.guestPhone}</dd></div><div><dt>Address</dt><dd>${item.guestAddress || 'Not supplied'}</dd></div></dl></section><section class="admin-panel"><h2>Stay</h2><dl class="detail-list"><div><dt>Room</dt><dd>${item.roomName}</dd></div><div><dt>Check-in</dt><dd>${item.checkIn}</dd></div><div><dt>Check-out</dt><dd>${item.checkOut}</dd></div><div><dt>Nights</dt><dd>${item.nights}</dd></div><div><dt>Adults</dt><dd>${item.adults}</dd></div><div><dt>Children</dt><dd>${item.children}</dd></div></dl></section><section class="admin-panel"><h2>Pricing</h2><dl class="detail-list"><div><dt>Nightly Rate</dt><dd>${item.nightlyRate === null ? 'On Request' : peso(item.nightlyRate)}</dd></div><div><dt>Estimated Total</dt><dd>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</dd></div></dl></section></div>`);
+  return adminShell(`Reservation: ${escapeHtml(item.reservationNumber)}`, '/admin/reservations', `<div class="reservation-detail-grid"><section class="admin-panel"><h2>Reservation</h2><dl class="detail-list"><div><dt>Reservation Number</dt><dd>${escapeHtml(item.reservationNumber)}</dd></div><div><dt>Status</dt><dd>${escapeHtml(item.status)}</dd></div><div><dt>Created</dt><dd>${new Date(item.createdAt).toLocaleString('en-PH')}</dd></div><div><dt>Updated</dt><dd>${new Date(item.updatedAt).toLocaleString('en-PH')}</dd></div></dl></section><section class="admin-panel"><h2>Guest</h2><dl class="detail-list"><div><dt>Full Name</dt><dd>${escapeHtml(item.guestFullName)}</dd></div><div><dt>Email</dt><dd>${escapeHtml(item.guestEmail)}</dd></div><div><dt>Phone</dt><dd>${escapeHtml(item.guestPhone)}</dd></div><div><dt>Address</dt><dd>${escapeHtml(item.guestAddress || 'Not supplied')}</dd></div><div><dt>Country</dt><dd>${escapeHtml(item.guestCountry || 'Not supplied')}</dd></div></dl></section><section class="admin-panel"><h2>Stay</h2><dl class="detail-list"><div><dt>Room</dt><dd>${escapeHtml(item.roomName)}</dd></div><div><dt>Check-in</dt><dd>${escapeHtml(item.checkIn)}</dd></div><div><dt>Check-out</dt><dd>${escapeHtml(item.checkOut)}</dd></div><div><dt>Nights</dt><dd>${item.nights}</dd></div><div><dt>Adults</dt><dd>${item.adults}</dd></div><div><dt>Children</dt><dd>${item.children}</dd></div></dl></section><section class="admin-panel"><h2>Pricing</h2><dl class="detail-list"><div><dt>Nightly Rate</dt><dd>${item.nightlyRate === null ? 'On Request' : peso(item.nightlyRate)}</dd></div><div><dt>Estimated Total</dt><dd>${item.estimatedTotal === null ? 'On Request' : peso(item.estimatedTotal)}</dd></div><div><dt>Payment preference</dt><dd>${escapeHtml(item.paymentMethod || 'Not supplied')}</dd></div><div><dt>Transaction reference</dt><dd>${escapeHtml(item.transactionReference || 'Not supplied')}</dd></div></dl></section><section class="admin-panel"><h2>Request and decision</h2><dl class="detail-list"><div><dt>Occasion</dt><dd>${escapeHtml(item.specialOccasion || 'Not supplied')}</dd></div><div><dt>Special requests</dt><dd>${escapeHtml(item.specialRequests || 'None')}</dd></div><div><dt>Decision at</dt><dd>${escapeHtml(item.decisionAt || 'Pending')}</dd></div><div><dt>Decision by</dt><dd>${escapeHtml(item.decisionBy || 'Pending')}</dd></div><div><dt>Guest email</dt><dd>${escapeHtml(item.decisionEmailStatus || 'Pending decision')}</dd></div></dl><p role="status">${escapeHtml(adminReservationMessage)}</p>${item.status === 'pending' ? `<button class="button dark" data-reservation-decision="confirmed" data-reservation-id="${escapeHtml(item.id)}" ${adminReservationBusy ? 'disabled' : ''}>CONFIRM RESERVATION</button> <button class="button cream" data-reservation-decision="not_available" data-reservation-id="${escapeHtml(item.id)}" ${adminReservationBusy ? 'disabled' : ''}>MARK NOT AVAILABLE</button>` : (item.decisionEmailStatus === 'failed' || (item.decisionEmailStatus === 'processing' && item.decisionEmailClaimedAt && Date.now() - Date.parse(item.decisionEmailClaimedAt) > 300000)) ? `<button class="button dark" data-reservation-retry data-reservation-id="${escapeHtml(item.id)}" ${adminReservationBusy ? 'disabled' : ''}>RETRY EMAIL</button>` : ''}</section></div>`);
 }
 
 function renderWebsiteOverview() {
@@ -476,7 +572,8 @@ function renderSettingsPage() {
 }
 
 function renderCalendar() {
-  const items = getReservations();
+  if (adminReservationState !== 'ready') return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations?' : escapeHtml(adminReservationMessage)}</div>`);
+  const items = adminReservationRows;
   const rows = Array.from({ length: 35 }, (_, index) => {
     const base = Date.UTC(2026, 9, 1);
     const day = new Date(base + index * 86400000);
@@ -488,25 +585,28 @@ function renderCalendar() {
 }
 
 function renderGuests() {
-  const items = getReservations();
+  if (adminReservationState !== 'ready') return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations?' : escapeHtml(adminReservationMessage)}</div>`);
+  const items = adminReservationRows;
   const grouped = Object.values(items.reduce((map, item) => {
     const key = item.guestEmail || item.guestPhone || item.guestFullName;
     map[key] = map[key] || { guestFullName: item.guestFullName, email: item.guestEmail, phone: item.guestPhone, reservations: [] };
     map[key].reservations.push(item);
     return map;
   }, {}));
-  const rows = grouped.map((item) => `<tr><td>${item.guestFullName}</td><td>${item.email}</td><td>${item.phone}</td><td>${item.reservations.length}</td><td>${item.reservations[0]?.checkIn || '—'}</td><td>${item.reservations.map((r) => `<a href="/admin/reservations/${r.id}">${r.reservationNumber}</a>`).join(', ')}</td></tr>`).join('');
+  const rows = grouped.map((item) => `<tr><td>${escapeHtml(item.guestFullName)}</td><td>${escapeHtml(item.email)}</td><td>${escapeHtml(item.phone)}</td><td>${item.reservations.length}</td><td>${item.reservations[0]?.checkIn || '—'}</td><td>${item.reservations.map((r) => `<a href="/admin/reservations/${r.id}">${r.reservationNumber}</a>`).join(', ')}</td></tr>`).join('');
   return adminShell('Guests', '/admin/guests', `<div class="admin-panel"><table class="admin-table"><thead><tr><th>Guest</th><th>Email</th><th>Phone</th><th>Reservations</th><th>Most Recent Booking</th><th>Associated reservations</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No guest records available.</td></tr>'}</tbody></table></div>`);
 }
 
 function renderPayments() {
-  const items = getReservations().map((row) => `<tr><td>${row.reservationNumber}</td><td>${row.guestFullName}</td><td>${row.roomName}</td><td>${row.paymentMethod || 'pay_at_resort'}</td><td>Unverified</td><td>${row.estimatedTotal === null ? 'On Request' : peso(row.estimatedTotal)}</td></tr>`).join('');
+  if (adminReservationState !== 'ready') return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations?' : escapeHtml(adminReservationMessage)}</div>`);
+  const items = adminReservationRows.map((row) => `<tr><td>${escapeHtml(row.reservationNumber)}</td><td>${escapeHtml(row.guestFullName)}</td><td>${escapeHtml(row.roomName)}</td><td>${row.paymentMethod || 'pay_at_resort'}</td><td>Unverified</td><td>${row.estimatedTotal === null ? 'On Request' : peso(row.estimatedTotal)}</td></tr>`).join('');
   return adminShell('Payments', '/admin/payments', `<div class="admin-panel"><table class="admin-table"><thead><tr><th>Reservation</th><th>Guest</th><th>Accommodation</th><th>Preference</th><th>Status</th><th>Estimated Amount</th></tr></thead><tbody>${items}</tbody></table></div>`);
 }
 
 function renderReports() {
-  const items = getReservations();
-  const byStatus = ['pending', 'confirmed', 'cancelled', 'completed'].map((status) => `${status}: ${items.filter((item) => item.status === status).length}`).join(', ');
+  if (adminReservationState !== 'ready') return adminShell('Reservations', '/admin/reservations', `<div class="admin-panel" role="status">${adminReservationState === 'loading' ? 'Loading reservations?' : escapeHtml(adminReservationMessage)}</div>`);
+  const items = adminReservationRows;
+  const byStatus = ['pending', 'confirmed', 'not_available', 'cancelled', 'completed'].map((status) => `${status}: ${items.filter((item) => item.status === status).length}`).join(', ');
   return adminShell('Reports', '/admin/reports', `<div class="stats-grid"><div class="stat-card"><span>Reservations by Status</span><strong>${byStatus}</strong></div><div class="stat-card"><span>Bookings by Room</span><strong>${rooms.length} room types</strong></div><div class="stat-card"><span>Upcoming Stays</span><strong>${items.filter((item) => item.status !== 'cancelled' && item.checkIn >= new Date().toISOString().slice(0, 10)).length}</strong></div><div class="stat-card"><span>Estimated Booking Value</span><strong>${peso(items.reduce((sum, item) => sum + Number(item.estimatedTotal || 0), 0))}</strong></div></div>`);
 }
 
@@ -711,7 +811,7 @@ function booking() {
   const countValue = (name, fallback) => { const value = Number(params.get(name)); return Number.isInteger(value) && value >= (name === 'adults' ? 1 : 0) ? value : fallback; };
   const activities = [['swimming', 'Swimming'], ['kayaking', 'Kayaking'], ['snorkeling', 'Snorkeling'], ['beach_volleyball', 'Beach Volleyball'], ['beach_time', 'Relaxing at the Beach']];
   const amenitiesList = [['swimming_pool', 'Swimming Pool'], ['beach_cottage', 'Beach Cottage'], ['shower_room', 'Shower Room'], ['picnic_area', 'Picnic Area'], ['resort_restaurant', 'Resort Restaurant']];
-  shell(`<section class="page-hero booking-hero"><span class="eyebrow">PLAN YOUR ESCAPE</span><h1>Reservation<br><em>Details</em></h1><p>Tell us about your preferred stay. Aquapoint staff will review your request and confirm availability.</p></section><section class="booking-layout"><form id="booking-form" class="reservation-form"><section class="booking-step"><div class="booking-step-head"><span class="step-number">01</span><div><h2>Your stay</h2><p>Choose your accommodation, dates, and guests.</p></div></div><div class="form-grid"><label class="wide">ACCOMMODATION<select name="room">${roomCatalog.map((r) => `<option value="${r.slug}" ${r.slug === selected.slug ? 'selected' : ''}>${r.name}</option>`).join('')}</select></label><label>CHECK-IN<input type="date" name="checkin" value="${dateValue('checkin')}" required></label><label>CHECK-OUT<input type="date" name="checkout" value="${dateValue('checkout')}" required></label><label>ADULTS<input type="number" name="adults" min="1" value="${countValue('adults', 2)}" required></label><label>CHILDREN<input type="number" name="children" min="0" value="${countValue('children', 0)}" required></label></div><div id="capacity-message" aria-live="polite"></div></section><section class="booking-step guest-section"><div class="booking-step-head"><span class="step-number">02</span><div><h2>Guest details</h2><p>How can the resort reach you about your request?</p></div></div><div class="form-grid"><label class="wide">FULL NAME<input name="guestFullName" autocomplete="name" maxlength="150" required></label><label>EMAIL ADDRESS<input type="email" name="guestEmail" autocomplete="email" maxlength="254" required></label><label>CONTACT NUMBER<input type="tel" name="guestPhone" autocomplete="tel" maxlength="40" required></label><label class="wide">ADDRESS <span class="optional">OPTIONAL</span><input name="guestAddress" autocomplete="street-address" maxlength="300"></label></div></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">03</span><div><h2>Preferences</h2><p>Optional interests help staff prepare your stay.</p></div></div><p class="preference-label">ACTIVITIES</p><div class="preference-grid">${activities.map(([value, label]) => `<label class="choice"><input type="checkbox" name="activities" value="${value}">${label}</label>`).join('')}</div><p class="preference-label">RESORT AMENITIES</p><div class="preference-grid">${amenitiesList.map(([value, label]) => `<label class="choice"><input type="checkbox" name="amenities" value="${value}">${label}</label>`).join('')}</div><div class="form-grid preferences-extra"><label class="wide">SPECIAL OCCASION <span class="optional">OPTIONAL</span><input name="specialOccasion" maxlength="120" placeholder="If you are celebrating something"></label><label class="wide">SPECIAL REQUESTS <span class="optional">OPTIONAL</span><textarea name="specialRequests" maxlength="2000" rows="3" placeholder="Anything you would like staff to know?"></textarea></label></div></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">04</span><div><h2>Payment preference</h2><p>No payment is collected on this website.</p></div></div><div class="payment-options"><label class="choice"><input type="radio" name="paymentMethod" value="pay_at_resort" checked>Pay at Resort</label><label class="choice"><input type="radio" name="paymentMethod" value="gcash">GCash</label><label class="choice"><input type="radio" name="paymentMethod" value="bank_transfer">Bank Transfer</label></div><p class="form-note">Your preference is for staff review only. Payment instructions are confirmed separately.</p></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">05</span><div><h2>Review your request</h2><p>Check the estimate before you submit.</p></div></div><div class="review-note">This is a booking request, not a confirmed reservation. Availability, amenities, activities, and final details are reviewed by Aquapoint Beach Resort.</div><label class="terms"><input type="checkbox" name="termsAccepted" required><span>I understand this is a booking request and my reservation is subject to confirmation by Aquapoint Beach Resort.</span></label><div id="form-errors" role="alert" aria-live="assertive"></div><p class="form-note">The amount shown is an estimated accommodation total. No payment is processed here.</p><div class="form-actions"><button type="submit" id="submit-booking" class="button dark">SUBMIT BOOKING REQUEST ${svg('arrow')}</button><button type="button" id="copy-request" class="copy-button">COPY RESERVATION DETAILS ${svg('arrow')}</button></div><span id="copy-status" role="status"></span></section></form><aside class="summary"><span class="eyebrow">YOUR ESTIMATE</span><h2>Stay Summary</h2><img id="summary-image" src="${img(selected)}" alt="${selected.name}"><dl><div><dt>Selected Accommodation</dt><dd id="s-room"></dd></div><div><dt>Check-in</dt><dd id="s-in">—</dd></div><div><dt>Check-out</dt><dd id="s-out">—</dd></div><div><dt>Number of Nights</dt><dd id="s-nights">—</dd></div><div><dt>Adults</dt><dd id="s-adults">2</dd></div><div><dt>Children</dt><dd id="s-children">0</dd></div><div><dt>Room Rate</dt><dd id="s-rate"></dd></div></dl><div class="summary-total"><span>Estimated Total</span><strong id="s-total"></strong></div><small>Availability and final details are confirmed by resort staff.</small></aside></section><details class="mobile-summary"><summary>ESTIMATED TOTAL <strong id="mobile-total">On Request</strong></summary><div><span id="mobile-room"></span><span id="mobile-dates"></span><span>Availability is confirmed by resort staff.</span></div></details>`);
+  shell(`<section class="page-hero booking-hero"><span class="eyebrow">PLAN YOUR ESCAPE</span><h1>Reservation<br><em>Details</em></h1><p>Tell us about your preferred stay. Aquapoint staff will review your request and confirm availability.</p></section><section class="booking-layout"><form id="booking-form" class="reservation-form"><section class="booking-step"><div class="booking-step-head"><span class="step-number">01</span><div><h2>Your stay</h2><p>Choose your accommodation, dates, and guests.</p></div></div><div class="form-grid"><label class="wide">ACCOMMODATION<select name="room">${roomCatalog.map((r) => `<option value="${r.slug}" ${r.slug === selected.slug ? 'selected' : ''}>${r.name}</option>`).join('')}</select></label><label>CHECK-IN<input type="date" name="checkin" value="${dateValue('checkin')}" required></label><label>CHECK-OUT<input type="date" name="checkout" value="${dateValue('checkout')}" required></label><label>ADULTS<input type="number" name="adults" min="1" value="${countValue('adults', 2)}" required></label><label>CHILDREN<input type="number" name="children" min="0" value="${countValue('children', 0)}" required></label></div><div id="capacity-message" aria-live="polite"></div></section><section class="booking-step guest-section"><div class="booking-step-head"><span class="step-number">02</span><div><h2>Guest details</h2><p>How can the resort reach you about your request?</p></div></div><div class="form-grid"><label class="wide">FULL NAME<input name="guestFullName" autocomplete="name" maxlength="150" required></label><label>EMAIL ADDRESS<input type="email" name="guestEmail" autocomplete="email" maxlength="254" required></label><label>CONTACT NUMBER<input type="tel" name="guestPhone" autocomplete="tel" maxlength="40" required></label><label class="wide">ADDRESS <span class="optional">OPTIONAL</span><input name="guestAddress" autocomplete="street-address" maxlength="300"></label><label>COUNTRY <span class="optional">OPTIONAL</span><input name="guestCountry" autocomplete="country-name" maxlength="100"></label></div></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">03</span><div><h2>Preferences</h2><p>Optional interests help staff prepare your stay.</p></div></div><p class="preference-label">ACTIVITIES</p><div class="preference-grid">${activities.map(([value, label]) => `<label class="choice"><input type="checkbox" name="activities" value="${value}">${label}</label>`).join('')}</div><p class="preference-label">RESORT AMENITIES</p><div class="preference-grid">${amenitiesList.map(([value, label]) => `<label class="choice"><input type="checkbox" name="amenities" value="${value}">${label}</label>`).join('')}</div><div class="form-grid preferences-extra"><label class="wide">SPECIAL OCCASION <span class="optional">OPTIONAL</span><input name="specialOccasion" maxlength="120" placeholder="If you are celebrating something"></label><label class="wide">SPECIAL REQUESTS <span class="optional">OPTIONAL</span><textarea name="specialRequests" maxlength="2000" rows="3" placeholder="Anything you would like staff to know?"></textarea></label></div></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">04</span><div><h2>Payment preference</h2><p>No payment is collected on this website.</p></div></div><div class="payment-options"><label class="choice"><input type="radio" name="paymentMethod" value="pay_at_resort" checked>Pay at Resort</label><label class="choice"><input type="radio" name="paymentMethod" value="gcash">GCash</label><label class="choice"><input type="radio" name="paymentMethod" value="bank_transfer">Bank Transfer</label></div><p class="form-note">Your preference is for staff review only. Payment instructions are confirmed separately.</p></section><section class="booking-step"><div class="booking-step-head"><span class="step-number">05</span><div><h2>Review your request</h2><p>Check the estimate before you submit.</p></div></div><div class="review-note">This is a booking request, not a confirmed reservation. Availability, amenities, activities, and final details are reviewed by Aquapoint Beach Resort.</div><label class="terms"><input type="checkbox" name="termsAccepted" required><span>I understand this is a booking request and my reservation is subject to confirmation by Aquapoint Beach Resort.</span></label><div id="form-errors" role="alert" aria-live="assertive"></div><p class="form-note">The amount shown is an estimated accommodation total. No payment is processed here.</p><div class="form-actions"><button type="submit" id="submit-booking" class="button dark">SUBMIT BOOKING REQUEST ${svg('arrow')}</button><button type="button" id="copy-request" class="copy-button">COPY RESERVATION DETAILS ${svg('arrow')}</button></div><span id="copy-status" role="status"></span></section></form><aside class="summary"><span class="eyebrow">YOUR ESTIMATE</span><h2>Stay Summary</h2><img id="summary-image" src="${img(selected)}" alt="${selected.name}"><dl><div><dt>Selected Accommodation</dt><dd id="s-room"></dd></div><div><dt>Check-in</dt><dd id="s-in">—</dd></div><div><dt>Check-out</dt><dd id="s-out">—</dd></div><div><dt>Number of Nights</dt><dd id="s-nights">—</dd></div><div><dt>Adults</dt><dd id="s-adults">2</dd></div><div><dt>Children</dt><dd id="s-children">0</dd></div><div><dt>Room Rate</dt><dd id="s-rate"></dd></div></dl><div class="summary-total"><span>Estimated Total</span><strong id="s-total"></strong></div><small>Availability and final details are confirmed by resort staff.</small></aside></section><details class="mobile-summary"><summary>ESTIMATED TOTAL <strong id="mobile-total">On Request</strong></summary><div><span id="mobile-room"></span><span id="mobile-dates"></span><span>Availability is confirmed by resort staff.</span></div></details>`);
   const bookingMobileCta = document.createElement('button');
   bookingMobileCta.type = 'submit';
   bookingMobileCta.setAttribute('form', 'booking-form');
@@ -777,14 +877,20 @@ function booking() {
     if (x.d.get('checkin') < today) { error.textContent = 'Check-in cannot be in the past.'; return; }
     if (!x.valid) { error.textContent = 'Check-out must be after check-in.'; return; }
     if (x.over) { error.textContent = `This accommodation allows up to ${x.r.capacity} guests. Please reduce the number of guests or select a larger room.`; return; }
-    const payload = { requestId, roomSlug: x.r.slug, checkIn: x.d.get('checkin'), checkOut: x.d.get('checkout'), adults: x.a, children: x.c, guestFullName: x.d.get('guestFullName'), guestEmail: x.d.get('guestEmail'), guestPhone: x.d.get('guestPhone'), guestAddress: x.d.get('guestAddress'), activities: x.d.getAll('activities'), amenities: x.d.getAll('amenities'), specialOccasion: x.d.get('specialOccasion'), specialRequests: x.d.get('specialRequests'), paymentMethod: x.d.get('paymentMethod'), termsAccepted: x.d.get('termsAccepted') === 'on' };
+    const payload = { requestId, roomSlug: x.r.slug, checkIn: x.d.get('checkin'), checkOut: x.d.get('checkout'), adults: x.a, children: x.c, guestFullName: x.d.get('guestFullName'), guestEmail: x.d.get('guestEmail'), guestPhone: x.d.get('guestPhone'), guestAddress: x.d.get('guestAddress'), guestCountry: x.d.get('guestCountry'), activities: x.d.getAll('activities'), amenities: x.d.getAll('amenities'), specialOccasion: x.d.get('specialOccasion'), specialRequests: x.d.get('specialRequests'), paymentMethod: x.d.get('paymentMethod'), termsAccepted: x.d.get('termsAccepted') === 'on' };
     const button = $('#submit-booking');
     submitting = true;
     button.disabled = true;
     button.textContent = 'Submitting booking request…';
     try {
-      const response = await fetch('/api/reservations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      const result = await response.json();
+      const localPreview = typeof location !== 'undefined' && ['127.0.0.1', 'localhost'].includes(location.hostname);
+      const browserSupabase = localPreview ? null : globalThis.__aquapointSupabase;
+      const invoked = browserSupabase
+        ? await browserSupabase.functions.invoke('create-reservation', { body: payload })
+        : null;
+      const response = invoked ? (invoked.error ? { ok: false, status: invoked.error.context?.status || 503 } : { ok: true, status: 201 })
+        : await fetch('/api/reservations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const result = invoked ? (invoked.data || { error: 'Unable to submit your booking request right now. Please try again.' }) : await response.json();
       if (!response.ok) {
         error.textContent = result.fields ? Object.values(result.fields).join(' ') : result.error || 'Unable to submit your booking request right now. Please try again.';
         if (response.status === 409) requestId = crypto.randomUUID();

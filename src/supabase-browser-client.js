@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import './admin-reservations.js';
 
 const projectUrl = __AQUAPOINT_SUPABASE_URL__;
 const publishableKey = __AQUAPOINT_SUPABASE_PUBLISHABLE_KEY__;
