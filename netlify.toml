@@ -1,0 +1,4 @@
+[build.environment]
+  # These settings are intentionally included in the browser client for Supabase auth.
+  # Keep scanning enabled for all other values, including server-only secret keys.
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY"
